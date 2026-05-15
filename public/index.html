@@ -435,8 +435,12 @@
         throw new Error(data.error || "Something went wrong.");
       }
 
-      // Convert ### headings to bold blocks, preserve line breaks
-      const formatted = data.proposal.replace(/### (.+)/g, "<strong>$1</strong>");
+      // Convert markdown syntax to HTML before injecting into the page.
+      // html2pdf renders the DOM, so proper HTML tags = proper PDF formatting.
+      const formatted = data.proposal
+        .replace(/### (.+)/g, "<strong>$1</strong>")   // ### Heading → bold block
+        .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>") // **bold** → <strong>
+        .replace(/\*(.+?)\*/g, "<em>$1</em>");            // *italic* → <em>
       proposalText.innerHTML = formatted;
 
       proposalOutput.style.display = "block";
