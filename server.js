@@ -5,6 +5,7 @@
 
 const express = require("express");
 const Anthropic = require("@anthropic-ai/sdk");
+const { chromium } = require("playwright");
 const path = require("path");
 
 const app = express();
@@ -169,6 +170,155 @@ SCOPE:
     res.status(500).json({
       error: "Failed to generate proposal. Please check your API key and try again.",
     });
+  }
+});
+
+// ============================================================
+// POST /export-pdf
+// Receives the rendered proposal HTML from the browser,
+// uses Puppeteer to print it to PDF on the server, and
+// sends back a downloadable file with a ProposalAI footer.
+// ============================================================
+app.post("/export-pdf", async (req, res) => {
+  const { html, clientName } = req.body;
+
+  if (!html) {
+    return res.status(400).json({ error: "No HTML content provided." });
+  }
+
+  // Wrap the proposal HTML in a complete document with print-ready styles.
+  // These mirror the display styles in index.html so the PDF matches the screen.
+  const fullHtml = `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: 'Segoe UI', Arial, sans-serif;
+      font-size: 13px;
+      line-height: 1.75;
+      color: #222;
+    }
+    h1, h2, h3 {
+      color: #2d3a8c;
+      font-weight: 700;
+      line-height: 1.3;
+      margin: 1.4rem 0 0.45rem;
+    }
+    h1 { font-size: 1.3rem; }
+    h2 {
+      font-size: 1.1rem;
+      border-bottom: 2px solid #e8eaf6;
+      padding-bottom: 0.3rem;
+    }
+    h3 { font-size: 1rem; }
+    p { margin-bottom: 0.8rem; }
+    strong { font-weight: 700; }
+    em { font-style: italic; }
+    ol, ul { margin: 0.4rem 0 0.9rem 1.5rem; padding: 0; }
+    li { display: list-item; margin-bottom: 0.3rem; padding-left: 0.2rem; }
+    ol li { list-style-type: decimal; }
+    ul li { list-style-type: disc; }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 0.9rem 0 1.1rem;
+      font-size: 0.88rem;
+    }
+    th, td {
+      border: 1px solid #c5cae9;
+      padding: 0.5rem 0.75rem;
+      text-align: left;
+      word-break: break-word;
+    }
+    th {
+      background: #eef0fb;
+      font-weight: 700;
+      color: #2d3a8c;
+      -webkit-print-color-adjust: exact;
+      print-color-adjust: exact;
+    }
+    tr:nth-child(even) td {
+      background: #f9fafe;
+      -webkit-print-color-adjust: exact;
+      print-color-adjust: exact;
+    }
+    hr {
+      border: none;
+      border-top: 2px solid #e8eaf6;
+      margin: 1.4rem 0;
+    }
+  </style>
+</head>
+<body>${html}</body>
+</html>`;
+
+  let browser;
+  try {
+    browser = await chromium.launch({
+      headless: true,
+      // These args are required when running inside a Linux container (Railway, Docker, etc.)
+      args: [
+        "--no-sandbox",
+        "--disable-setuid-sandbox",
+        "--disable-dev-shm-usage",
+        "--disable-accelerated-2d-canvas",
+        "--no-first-run",
+        "--no-zygote",
+        "--disable-gpu",
+      ],
+    });
+
+    const page = await browser.newPage();
+
+    // Load the full HTML and wait for any fonts/layout to settle.
+    // Playwright uses "networkidle" (no number suffix) instead of Puppeteer's "networkidle0".
+    await page.setContent(fullHtml, { waitUntil: "networkidle" });
+
+    const pdfBuffer = await page.pdf({
+      format: "A4",
+      margin: {
+        top: "18mm",
+        right: "18mm",
+        bottom: "24mm", // extra bottom space to seat the footer
+        left: "18mm",
+      },
+      // displayHeaderFooter injects the footer HTML on every page.
+      // The footer template runs in its own isolated context so all styles must be inline.
+      displayHeaderFooter: true,
+      headerTemplate: "<div></div>", // required placeholder — keeps header area blank
+      footerTemplate: `
+        <div style="
+          font-family: 'Segoe UI', Arial, sans-serif;
+          font-size: 9px;
+          color: #aaa;
+          text-align: center;
+          width: 100%;
+          padding: 0 18mm;
+          box-sizing: border-box;
+        ">
+          Generated with ProposalAI — proposalai-production.up.railway.app
+        </div>`,
+      printBackground: true, // needed to render coloured table headers
+    });
+
+    const filename = clientName ? `Proposal — ${clientName}.pdf` : "Proposal.pdf";
+
+    res.set({
+      "Content-Type": "application/pdf",
+      "Content-Disposition": `attachment; filename="${filename}"`,
+      "Content-Length": pdfBuffer.length,
+    });
+
+    res.send(pdfBuffer);
+
+  } catch (error) {
+    console.error("PDF generation error:", error.message);
+    res.status(500).json({ error: "Failed to generate PDF. Please try again." });
+  } finally {
+    // Always close the browser to free memory, even if an error occurred
+    if (browser) await browser.close();
   }
 });
 

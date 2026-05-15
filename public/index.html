@@ -6,8 +6,6 @@
   <title>ProposalAI — Generate Business Proposals Instantly</title>
   <!-- marked.js — converts markdown to proper HTML (headings, lists, tables, bold, etc.) -->
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
-  <!-- html2pdf.js — converts an HTML element to a downloadable PDF, no server needed -->
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -521,54 +519,49 @@
     });
   });
 
-  // Export the proposal as a downloadable PDF
-  pdfBtn.addEventListener("click", () => {
+  // Export the proposal as a downloadable PDF.
+  // Sends the rendered HTML to the server, which uses Puppeteer to produce a
+  // proper A4 PDF with a ProposalAI footer on every page — then streams it back.
+  pdfBtn.addEventListener("click", async () => {
     pdfBtn.disabled = true;
-    pdfBtn.textContent = "Generating PDF...";
+    pdfBtn.textContent = "Generating PDF…";
 
-    // Use the client company name as the filename if available, otherwise fall back
-    const clientName = document.getElementById("clientCompany").value.trim();
-    const filename = clientName
-      ? `Proposal — ${clientName}.pdf`
-      : "proposal.pdf";
+    try {
+      const clientName = document.getElementById("clientCompany").value.trim();
 
-    // html2pdf options — A4 with explicit margins and a capped capture width.
-    const options = {
-      // Explicit object so top/right/bottom/left are unambiguous.
-      margin:   { top: 14, right: 18, bottom: 14, left: 18 },
-      filename: filename,
-      image:    { type: "jpeg", quality: 0.98 },
-      html2canvas: {
-        scale: 2,           // 2× for sharp text on retina screens
-        useCORS: false,     // no external resources in the proposal, false is more reliable
-        logging: false,     // suppress html2canvas console noise
-        // windowWidth caps the capture viewport to A4 width (794px ≈ A4 at 96dpi).
-        // Without this, html2canvas snapshots the full browser window and content
-        // overflows the right edge of the PDF page.
-        windowWidth: 794,
-      },
-      jsPDF: { unit: "mm", format: "a4", orientation: "portrait" },
-      // NOTE: pagebreak "avoid-all" mode is intentionally omitted.
-      // It iterates every DOM element to find safe break points and hangs
-      // indefinitely on complex content (tables, nested lists). Default
-      // page-break behaviour is reliable enough for proposal documents.
-    };
-
-    // html2pdf reads the DOM element directly — styles included.
-    // .catch() ensures the button always re-enables even if the export fails.
-    html2pdf()
-      .set(options)
-      .from(proposalText)
-      .save()
-      .then(() => {
-        pdfBtn.disabled = false;
-        pdfBtn.textContent = "Export as PDF";
-      })
-      .catch((err) => {
-        console.error("PDF export error:", err);
-        pdfBtn.disabled = false;
-        pdfBtn.textContent = "Export as PDF";
+      const response = await fetch("/export-pdf", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          html: proposalText.innerHTML,
+          clientName,
+        }),
       });
+
+      if (!response.ok) {
+        // Try to read an error message from the server, fall back to a generic one
+        const err = await response.json().catch(() => ({}));
+        throw new Error(err.error || "PDF generation failed.");
+      }
+
+      // Turn the PDF byte stream into a Blob and trigger a browser download
+      const blob = await response.blob();
+      const url  = URL.createObjectURL(blob);
+      const a    = document.createElement("a");
+      a.href     = url;
+      a.download = clientName ? `Proposal — ${clientName}.pdf` : "Proposal.pdf";
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+
+    } catch (err) {
+      console.error("PDF export error:", err);
+      alert("PDF export failed: " + err.message);
+    } finally {
+      pdfBtn.disabled = false;
+      pdfBtn.textContent = "Export as PDF";
+    }
   });
 </script>
 </body>
