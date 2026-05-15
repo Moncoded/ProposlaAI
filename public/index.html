@@ -4,6 +4,8 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>ProposalAI — Generate Business Proposals Instantly</title>
+  <!-- html2pdf.js — converts an HTML element to a downloadable PDF, no server needed -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -181,18 +183,28 @@
     }
     .output-header h2 { font-size: 1.1rem; color: #2d3a8c; }
 
-    #copyBtn {
+    /* Shared style for both output action buttons */
+    .output-btn {
       padding: 0.4rem 0.9rem;
-      background: #e8eaf6;
       border: none;
       border-radius: 6px;
       font-size: 0.82rem;
       font-weight: 600;
-      color: #2d3a8c;
       cursor: pointer;
       transition: background 0.2s;
     }
+    #copyBtn {
+      background: #e8eaf6;
+      color: #2d3a8c;
+    }
     #copyBtn:hover { background: #c5cae9; }
+
+    #pdfBtn {
+      background: #2d3a8c;
+      color: #fff;
+    }
+    #pdfBtn:hover { background: #1e2a6e; }
+    #pdfBtn:disabled { background: #9fa8da; cursor: not-allowed; }
 
     /* The proposal body */
     #proposalText {
@@ -353,7 +365,10 @@
   <div class="card" id="proposalOutput">
     <div class="output-header">
       <h2>Your Proposal</h2>
-      <button id="copyBtn">Copy Text</button>
+      <div style="display:flex; gap:0.5rem;">
+        <button id="copyBtn" class="output-btn">Copy Text</button>
+        <button id="pdfBtn" class="output-btn">Export as PDF</button>
+      </div>
     </div>
     <div id="proposalText"></div>
   </div>
@@ -366,12 +381,13 @@
   // Collects the brief, sends to /generate, renders the result
   // ============================================================
 
-  const form         = document.getElementById("proposalForm");
-  const generateBtn  = document.getElementById("generateBtn");
-  const errorMsg     = document.getElementById("errorMsg");
+  const form           = document.getElementById("proposalForm");
+  const generateBtn    = document.getElementById("generateBtn");
+  const errorMsg       = document.getElementById("errorMsg");
   const proposalOutput = document.getElementById("proposalOutput");
   const proposalText   = document.getElementById("proposalText");
   const copyBtn        = document.getElementById("copyBtn");
+  const pdfBtn         = document.getElementById("pdfBtn");
 
   form.addEventListener("submit", async (e) => {
     e.preventDefault();
@@ -441,6 +457,37 @@
       copyBtn.textContent = "Copied!";
       setTimeout(() => { copyBtn.textContent = "Copy Text"; }, 2000);
     });
+  });
+
+  // Export the proposal as a downloadable PDF
+  pdfBtn.addEventListener("click", () => {
+    pdfBtn.disabled = true;
+    pdfBtn.textContent = "Generating PDF...";
+
+    // Use the client company name as the filename if available, otherwise fall back
+    const clientName = document.getElementById("clientCompany").value.trim();
+    const filename = clientName
+      ? `Proposal — ${clientName}.pdf`
+      : "proposal.pdf";
+
+    // html2pdf options — clean A4 page with sensible margins
+    const options = {
+      margin:      [14, 16],          // [top/bottom, left/right] in mm
+      filename:    filename,
+      image:       { type: "jpeg", quality: 0.98 },
+      html2canvas: { scale: 2 },      // scale: 2 gives sharper text on retina screens
+      jsPDF:       { unit: "mm", format: "a4", orientation: "portrait" },
+    };
+
+    // html2pdf reads the DOM element directly — styles included
+    html2pdf()
+      .set(options)
+      .from(proposalText)
+      .save()
+      .then(() => {
+        pdfBtn.disabled = false;
+        pdfBtn.textContent = "Export as PDF";
+      });
   });
 </script>
 </body>
