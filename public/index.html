@@ -4,6 +4,8 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>ProposalAI — Generate Business Proposals Instantly</title>
+  <!-- marked.js — converts markdown to proper HTML (headings, lists, tables, bold, etc.) -->
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
   <!-- html2pdf.js — converts an HTML element to a downloadable PDF, no server needed -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
   <style>
@@ -206,19 +208,78 @@
     #pdfBtn:hover { background: #1e2a6e; }
     #pdfBtn:disabled { background: #9fa8da; cursor: not-allowed; }
 
-    /* The proposal body */
+    /* ---- Proposal body — styles for every element marked.js produces ---- */
     #proposalText {
-      white-space: pre-wrap;
       font-size: 0.94rem;
       line-height: 1.8;
       color: #222;
+      /* no white-space: pre-wrap — marked.js handles paragraphs via <p> tags */
     }
-    /* Style ### headings injected by JS */
-    #proposalText strong {
-      display: block;
-      font-size: 1rem;
+
+    /* Section headings */
+    #proposalText h1,
+    #proposalText h2,
+    #proposalText h3 {
       color: #2d3a8c;
-      margin: 1.3rem 0 0.3rem;
+      font-weight: 700;
+      line-height: 1.3;
+      margin: 1.6rem 0 0.5rem;
+    }
+    #proposalText h1 { font-size: 1.4rem; }
+    #proposalText h2 {
+      font-size: 1.15rem;
+      border-bottom: 2px solid #e8eaf6;
+      padding-bottom: 0.3rem;
+    }
+    #proposalText h3 { font-size: 1rem; }
+
+    /* Paragraphs */
+    #proposalText p { margin-bottom: 0.9rem; }
+
+    /* Inline formatting — display:inline so bold doesn't break onto its own line */
+    #proposalText strong { font-weight: 700; color: inherit; display: inline; }
+    #proposalText em     { font-style: italic; }
+
+    /* Ordered and unordered lists */
+    #proposalText ol,
+    #proposalText ul {
+      margin: 0.5rem 0 1rem 1.6rem;  /* left indent gives space for the number/bullet */
+      padding: 0;
+    }
+    #proposalText li {
+      display: list-item;            /* keeps number and text on the same line */
+      margin-bottom: 0.35rem;
+      padding-left: 0.25rem;
+    }
+    #proposalText ol li { list-style-type: decimal; }
+    #proposalText ul li { list-style-type: disc; }
+
+    /* Tables */
+    #proposalText table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 1rem 0 1.2rem;
+      font-size: 0.9rem;
+    }
+    #proposalText th,
+    #proposalText td {
+      border: 1px solid #c5cae9;
+      padding: 0.55rem 0.85rem;
+      text-align: left;
+      word-break: break-word;        /* prevent long cell values overflowing */
+    }
+    #proposalText th {
+      background: #eef0fb;
+      font-weight: 700;
+      color: #2d3a8c;
+    }
+    #proposalText tr:nth-child(even) td { background: #f9fafe; }
+
+    /* Horizontal rules Claude occasionally adds between sections */
+    #proposalText hr {
+      border: none;
+      border-top: 2px solid #e8eaf6;
+      margin: 1.5rem 0;
     }
   </style>
 </head>
@@ -435,13 +496,10 @@
         throw new Error(data.error || "Something went wrong.");
       }
 
-      // Convert markdown syntax to HTML before injecting into the page.
-      // html2pdf renders the DOM, so proper HTML tags = proper PDF formatting.
-      const formatted = data.proposal
-        .replace(/### (.+)/g, "<strong>$1</strong>")   // ### Heading → bold block
-        .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>") // **bold** → <strong>
-        .replace(/\*(.+?)\*/g, "<em>$1</em>");            // *italic* → <em>
-      proposalText.innerHTML = formatted;
+      // marked.parse() converts the full markdown response to proper HTML in one step.
+      // This handles headings, bold, italic, ordered lists, tables, and hr correctly —
+      // far more reliably than a chain of regex replacements.
+      proposalText.innerHTML = marked.parse(data.proposal);
 
       proposalOutput.style.display = "block";
       proposalOutput.scrollIntoView({ behavior: "smooth" });
@@ -474,13 +532,24 @@
       ? `Proposal — ${clientName}.pdf`
       : "proposal.pdf";
 
-    // html2pdf options — clean A4 page with sensible margins
+    // html2pdf options — A4 with explicit margins and a capped capture width.
     const options = {
-      margin:      [14, 16],          // [top/bottom, left/right] in mm
-      filename:    filename,
-      image:       { type: "jpeg", quality: 0.98 },
-      html2canvas: { scale: 2 },      // scale: 2 gives sharper text on retina screens
-      jsPDF:       { unit: "mm", format: "a4", orientation: "portrait" },
+      // Explicit object (not array) so top/right/bottom/left are unambiguous.
+      // 18mm left/right leaves 174mm of content width — enough for tables to breathe.
+      margin:   { top: 14, right: 18, bottom: 14, left: 18 },
+      filename: filename,
+      image:    { type: "jpeg", quality: 0.98 },
+      html2canvas: {
+        scale: 2,          // 2× for sharp text on retina screens
+        useCORS: true,
+        // windowWidth tells html2canvas how wide to treat the viewport when
+        // capturing. 794px ≈ A4 at 96 dpi. Without this, it snapshots the full
+        // browser window width and the content overflows the PDF page on the right.
+        windowWidth: 794,
+      },
+      jsPDF:    { unit: "mm", format: "a4", orientation: "portrait" },
+      // avoid-all prevents page breaks from cutting through a list item or table row
+      pagebreak: { mode: ["avoid-all", "css", "legacy"] },
     };
 
     // html2pdf reads the DOM element directly — styles included
