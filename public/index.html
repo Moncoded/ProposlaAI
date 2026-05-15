@@ -534,30 +534,38 @@
 
     // html2pdf options — A4 with explicit margins and a capped capture width.
     const options = {
-      // Explicit object (not array) so top/right/bottom/left are unambiguous.
-      // 18mm left/right leaves 174mm of content width — enough for tables to breathe.
+      // Explicit object so top/right/bottom/left are unambiguous.
       margin:   { top: 14, right: 18, bottom: 14, left: 18 },
       filename: filename,
       image:    { type: "jpeg", quality: 0.98 },
       html2canvas: {
-        scale: 2,          // 2× for sharp text on retina screens
-        useCORS: true,
-        // windowWidth tells html2canvas how wide to treat the viewport when
-        // capturing. 794px ≈ A4 at 96 dpi. Without this, it snapshots the full
-        // browser window width and the content overflows the PDF page on the right.
+        scale: 2,           // 2× for sharp text on retina screens
+        useCORS: false,     // no external resources in the proposal, false is more reliable
+        logging: false,     // suppress html2canvas console noise
+        // windowWidth caps the capture viewport to A4 width (794px ≈ A4 at 96dpi).
+        // Without this, html2canvas snapshots the full browser window and content
+        // overflows the right edge of the PDF page.
         windowWidth: 794,
       },
-      jsPDF:    { unit: "mm", format: "a4", orientation: "portrait" },
-      // avoid-all prevents page breaks from cutting through a list item or table row
-      pagebreak: { mode: ["avoid-all", "css", "legacy"] },
+      jsPDF: { unit: "mm", format: "a4", orientation: "portrait" },
+      // NOTE: pagebreak "avoid-all" mode is intentionally omitted.
+      // It iterates every DOM element to find safe break points and hangs
+      // indefinitely on complex content (tables, nested lists). Default
+      // page-break behaviour is reliable enough for proposal documents.
     };
 
-    // html2pdf reads the DOM element directly — styles included
+    // html2pdf reads the DOM element directly — styles included.
+    // .catch() ensures the button always re-enables even if the export fails.
     html2pdf()
       .set(options)
       .from(proposalText)
       .save()
       .then(() => {
+        pdfBtn.disabled = false;
+        pdfBtn.textContent = "Export as PDF";
+      })
+      .catch((err) => {
+        console.error("PDF export error:", err);
         pdfBtn.disabled = false;
         pdfBtn.textContent = "Export as PDF";
       });
