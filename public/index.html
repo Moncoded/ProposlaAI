@@ -524,9 +524,9 @@
   });
 
   // ── PDF Export ──────────────────────────────────────────────
-  // Fully client-side: html2canvas renders the proposal div to a
-  // pixel-accurate canvas; jsPDF slices it across A4 pages and
-  // stamps a ProposalAI footer on each one before saving.
+  // Uses jsPDF's built-in html() method, which internally calls
+  // html2canvas and handles multi-page splitting automatically.
+  // No manual canvas slicing — no duplication risk.
   pdfBtn.addEventListener("click", async () => {
     pdfBtn.disabled = true;
     pdfBtn.textContent = "Generating PDF…";
@@ -536,71 +536,42 @@
       const clientName = document.getElementById("clientCompany").value.trim();
       const filename   = clientName ? `Proposal — ${clientName}.pdf` : "Proposal.pdf";
 
-      // ── Page geometry ──────────────────────────────────────
-      const doc      = new jsPDF({ unit: "mm", format: "a4", orientation: "portrait" });
-      const pageW    = doc.internal.pageSize.getWidth();   // 210 mm
-      const pageH    = doc.internal.pageSize.getHeight();  // 297 mm
-      const marginX  = 15;   // mm left/right
-      const marginTop = 15;  // mm top
-      const footerH  = 14;   // mm reserved at the bottom for the footer line
-      const contentH = pageH - marginTop - footerH; // usable height per page
+      const doc   = new jsPDF({ unit: "mm", format: "a4", orientation: "portrait" });
+      const pageW = doc.internal.pageSize.getWidth();   // 210 mm
+      const pageH = doc.internal.pageSize.getHeight();  // 297 mm
+      const margin = 20;                                // mm — all four sides
 
-      // ── Capture the proposal div at A4 width ──────────────
-      // windowWidth: 794px ≈ A4 at 96 dpi — prevents right-side overflow.
-      // scale: 2 gives sharp text on retina / high-DPI screens.
-      const canvas = await html2canvas(proposalText, {
-        scale: 2,
-        useCORS: false,
-        logging: false,
-        windowWidth: 794,
+      // ── Text size explained ────────────────────────────────
+      // jsPDF scales source pixels → mm using the ratio: width / windowWidth.
+      // width: 170mm (content area) / windowWidth: 680px  →  0.25 mm per px.
+      // The body font is ~15px on screen  →  15 × 0.25 = 3.75 mm ≈ 10.6pt.
+      // That's comfortably readable in a printed document.
+      // Raising windowWidth makes text smaller; lowering it makes text larger.
+      await doc.html(proposalText, {
+        x: margin,
+        y: margin,
+        width:       pageW - margin * 2,  // 170 mm usable content width
+        windowWidth: 680,                 // source render width in px
+        // margin[] = [top, right, bottom, left] for subsequent pages.
+        // Bottom is enlarged to leave a clear lane for the footer.
+        margin: [margin, margin, margin + 14, margin],
+        // 'text' mode finds natural break points between block elements
+        // so sentences never split mid-line across pages.
+        autoPaging: "text",
       });
 
-      const imgData  = canvas.toDataURL("image/jpeg", 0.95);
-      const imgW     = pageW - marginX * 2;           // image fills content width
-      // Scale the full canvas height to match the mm width we're printing at
-      const imgTotalH = (canvas.height / canvas.width) * imgW;
-
-      // ── Slice the canvas across as many pages as needed ───
-      // Each page shows a vertical strip of the full canvas image.
-      // srcY tracks how far down the image we've already printed (in mm).
-      let srcY      = 0;
-      let pageIndex = 0;
-
-      while (srcY < imgTotalH) {
-        if (pageIndex > 0) doc.addPage();
-
-        // How much image fits on this page (may be less on the last page)
-        const sliceH = Math.min(contentH, imgTotalH - srcY);
-
-        // jsPDF's addImage lets us specify which portion of the source image
-        // to render via the sx/sy/sWidth/sHeight parameters (in image pixels).
-        const pxPerMm  = canvas.width / imgW;          // pixels per mm in the canvas
-        const srcYpx   = srcY   * pxPerMm;
-        const sliceHpx = sliceH * pxPerMm;
-
-        doc.addImage(
-          imgData, "JPEG",
-          marginX, marginTop,         // x, y position on the PDF page (mm)
-          imgW, sliceH,               // width, height to draw on page (mm)
-          "", "FAST",                 // alias, compression
-          0,                          // rotation
-          0, srcYpx,                  // source x, source y (pixels into the canvas)
-          canvas.width, sliceHpx      // source width, source height (pixels)
-        );
-
-        // ── Footer ────────────────────────────────────────────
-        // Drawn after the image so it always sits on top.
+      // ── Footer — stamped on every page after layout is done ─
+      const totalPages = doc.internal.getNumberOfPages();
+      for (let i = 1; i <= totalPages; i++) {
+        doc.setPage(i);
         doc.setFontSize(8);
         doc.setTextColor(180, 180, 180);
         doc.text(
           "Generated with ProposalAI — proposalai-production.up.railway.app",
           pageW / 2,
-          pageH - 6,
+          pageH - 8,
           { align: "center" }
         );
-
-        srcY += contentH;
-        pageIndex++;
       }
 
       doc.save(filename);
