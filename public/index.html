@@ -6,6 +6,10 @@
   <title>ProposalAI — Generate Business Proposals Instantly</title>
   <!-- marked.js — converts markdown to proper HTML (headings, lists, tables, bold, etc.) -->
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <!-- html2canvas — renders a DOM element to a pixel-accurate canvas (used by jsPDF) -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+  <!-- jsPDF — builds the PDF from canvas images page by page, all client-side -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -519,41 +523,87 @@
     });
   });
 
-  // Export the proposal as a downloadable PDF.
-  // Sends the rendered HTML to the server, which uses Puppeteer to produce a
-  // proper A4 PDF with a ProposalAI footer on every page — then streams it back.
+  // ── PDF Export ──────────────────────────────────────────────
+  // Fully client-side: html2canvas renders the proposal div to a
+  // pixel-accurate canvas; jsPDF slices it across A4 pages and
+  // stamps a ProposalAI footer on each one before saving.
   pdfBtn.addEventListener("click", async () => {
     pdfBtn.disabled = true;
     pdfBtn.textContent = "Generating PDF…";
 
     try {
+      const { jsPDF } = window.jspdf;
       const clientName = document.getElementById("clientCompany").value.trim();
+      const filename   = clientName ? `Proposal — ${clientName}.pdf` : "Proposal.pdf";
 
-      const response = await fetch("/export-pdf", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          html: proposalText.innerHTML,
-          clientName,
-        }),
+      // ── Page geometry ──────────────────────────────────────
+      const doc      = new jsPDF({ unit: "mm", format: "a4", orientation: "portrait" });
+      const pageW    = doc.internal.pageSize.getWidth();   // 210 mm
+      const pageH    = doc.internal.pageSize.getHeight();  // 297 mm
+      const marginX  = 15;   // mm left/right
+      const marginTop = 15;  // mm top
+      const footerH  = 14;   // mm reserved at the bottom for the footer line
+      const contentH = pageH - marginTop - footerH; // usable height per page
+
+      // ── Capture the proposal div at A4 width ──────────────
+      // windowWidth: 794px ≈ A4 at 96 dpi — prevents right-side overflow.
+      // scale: 2 gives sharp text on retina / high-DPI screens.
+      const canvas = await html2canvas(proposalText, {
+        scale: 2,
+        useCORS: false,
+        logging: false,
+        windowWidth: 794,
       });
 
-      if (!response.ok) {
-        // Try to read an error message from the server, fall back to a generic one
-        const err = await response.json().catch(() => ({}));
-        throw new Error(err.error || "PDF generation failed.");
+      const imgData  = canvas.toDataURL("image/jpeg", 0.95);
+      const imgW     = pageW - marginX * 2;           // image fills content width
+      // Scale the full canvas height to match the mm width we're printing at
+      const imgTotalH = (canvas.height / canvas.width) * imgW;
+
+      // ── Slice the canvas across as many pages as needed ───
+      // Each page shows a vertical strip of the full canvas image.
+      // srcY tracks how far down the image we've already printed (in mm).
+      let srcY      = 0;
+      let pageIndex = 0;
+
+      while (srcY < imgTotalH) {
+        if (pageIndex > 0) doc.addPage();
+
+        // How much image fits on this page (may be less on the last page)
+        const sliceH = Math.min(contentH, imgTotalH - srcY);
+
+        // jsPDF's addImage lets us specify which portion of the source image
+        // to render via the sx/sy/sWidth/sHeight parameters (in image pixels).
+        const pxPerMm  = canvas.width / imgW;          // pixels per mm in the canvas
+        const srcYpx   = srcY   * pxPerMm;
+        const sliceHpx = sliceH * pxPerMm;
+
+        doc.addImage(
+          imgData, "JPEG",
+          marginX, marginTop,         // x, y position on the PDF page (mm)
+          imgW, sliceH,               // width, height to draw on page (mm)
+          "", "FAST",                 // alias, compression
+          0,                          // rotation
+          0, srcYpx,                  // source x, source y (pixels into the canvas)
+          canvas.width, sliceHpx      // source width, source height (pixels)
+        );
+
+        // ── Footer ────────────────────────────────────────────
+        // Drawn after the image so it always sits on top.
+        doc.setFontSize(8);
+        doc.setTextColor(180, 180, 180);
+        doc.text(
+          "Generated with ProposalAI — proposalai-production.up.railway.app",
+          pageW / 2,
+          pageH - 6,
+          { align: "center" }
+        );
+
+        srcY += contentH;
+        pageIndex++;
       }
 
-      // Turn the PDF byte stream into a Blob and trigger a browser download
-      const blob = await response.blob();
-      const url  = URL.createObjectURL(blob);
-      const a    = document.createElement("a");
-      a.href     = url;
-      a.download = clientName ? `Proposal — ${clientName}.pdf` : "Proposal.pdf";
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
+      doc.save(filename);
 
     } catch (err) {
       console.error("PDF export error:", err);
