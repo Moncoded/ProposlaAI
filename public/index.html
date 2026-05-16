@@ -524,46 +524,96 @@
   });
 
   // ── PDF Export ──────────────────────────────────────────────
-  // Uses jsPDF's built-in html() method, which internally calls
-  // html2canvas and handles multi-page splitting automatically.
-  // No manual canvas slicing — no duplication risk.
+  // Strategy:
+  //   1. Temporarily lock the proposal element to 680 px wide and
+  //      force tables to fixed layout so nothing overflows.
+  //   2. Capture the constrained element with html2canvas (scale 1,
+  //      so 680 canvas-px maps to 170 mm → ~10.6 pt body text).
+  //   3. Slice the canvas page-by-page using ctx.drawImage() — the
+  //      only reliable way to crop a canvas in jsPDF without duplication.
+  //   4. Stamp the footer on every page, then restore all inline styles.
   pdfBtn.addEventListener("click", async () => {
     pdfBtn.disabled = true;
     pdfBtn.textContent = "Generating PDF…";
+
+    // ── Step 1: constrain the element before capture ──────────
+    // Saving and restoring per-property so the card's existing
+    // CSS is never permanently touched.
+    proposalText.style.width      = "680px";
+    proposalText.style.maxWidth   = "680px";
+    proposalText.style.overflow   = "hidden";
+    proposalText.style.boxSizing  = "border-box";
+
+    // Tables: fixed layout prevents any column from overflowing
+    proposalText.querySelectorAll("table").forEach(t => {
+      t.style.width       = "100%";
+      t.style.tableLayout = "fixed";
+      t.style.wordBreak   = "break-word";
+    });
+    proposalText.querySelectorAll("td, th").forEach(c => {
+      c.style.wordBreak    = "break-word";
+      c.style.overflowWrap = "break-word";
+    });
 
     try {
       const { jsPDF } = window.jspdf;
       const clientName = document.getElementById("clientCompany").value.trim();
       const filename   = clientName ? `Proposal — ${clientName}.pdf` : "Proposal.pdf";
 
-      const doc   = new jsPDF({ unit: "mm", format: "a4", orientation: "portrait" });
-      const pageW = doc.internal.pageSize.getWidth();   // 210 mm
-      const pageH = doc.internal.pageSize.getHeight();  // 297 mm
-      const margin = 20;                                // mm — all four sides
+      // ── Page geometry ─────────────────────────────────────
+      const doc      = new jsPDF({ unit: "mm", format: "a4", orientation: "portrait" });
+      const pageW    = doc.internal.pageSize.getWidth();   // 210 mm
+      const pageH    = doc.internal.pageSize.getHeight();  // 297 mm
+      const marginX  = 20;                                 // mm left (and right = 210-20-170 = 20 mm)
+      const marginY  = 20;                                 // mm top
+      const footerH  = 14;                                 // mm reserved for footer text
+      const contentW = pageW - marginX * 2;               // 170 mm — max content width
+      const contentH = pageH - marginY - footerH;         // usable height per page
 
-      // ── Text size explained ────────────────────────────────
-      // jsPDF scales source pixels → mm using the ratio: width / windowWidth.
-      // width: 170mm (content area) / windowWidth: 680px  →  0.25 mm per px.
-      // The body font is ~15px on screen  →  15 × 0.25 = 3.75 mm ≈ 10.6pt.
-      // That's comfortably readable in a printed document.
-      // Raising windowWidth makes text smaller; lowering it makes text larger.
-      await doc.html(proposalText, {
-        x: margin,
-        y: margin,
-        width:       pageW - margin * 2,  // 170 mm usable content width
-        windowWidth: 680,                 // source render width in px
-        // margin[] = [top, right, bottom, left] for subsequent pages.
-        // Bottom is enlarged to leave a clear lane for the footer.
-        margin: [margin, margin, margin + 14, margin],
-        // 'text' mode finds natural break points between block elements
-        // so sentences never split mid-line across pages.
-        autoPaging: "text",
+      // ── Step 2: capture ──────────────────────────────────
+      // scale:1  →  canvas is exactly 680 px wide
+      // pxPerMm  =  680 / 170  =  4 px/mm  ≈  102 dpi
+      // body font 15 px  →  15 / 4  =  3.75 mm  ≈  10.6 pt  (readable)
+      const canvas = await html2canvas(proposalText, {
+        scale:       1,
+        useCORS:     false,
+        logging:     false,
+        windowWidth: 680,
       });
 
-      // ── Footer — stamped on every page after layout is done ─
-      const totalPages = doc.internal.getNumberOfPages();
-      for (let i = 1; i <= totalPages; i++) {
-        doc.setPage(i);
+      // ── Step 3: slice and add pages ───────────────────────
+      const pxPerMm    = canvas.width / contentW;          // 4 px/mm
+      const pageHpx    = Math.round(contentH * pxPerMm);  // canvas px per page
+      const totalPages = Math.ceil(canvas.height / pageHpx);
+
+      for (let i = 0; i < totalPages; i++) {
+        if (i > 0) doc.addPage();
+
+        const srcY     = i * pageHpx;
+        const sliceHpx = Math.min(pageHpx, canvas.height - srcY);
+        const sliceHmm = sliceHpx / pxPerMm;
+
+        // Draw only this page's vertical strip onto a temp canvas
+        const slice   = document.createElement("canvas");
+        slice.width   = canvas.width;
+        slice.height  = sliceHpx;
+        const ctx     = slice.getContext("2d");
+        ctx.fillStyle = "#ffffff";
+        ctx.fillRect(0, 0, slice.width, slice.height);
+        ctx.drawImage(
+          canvas,
+          0, srcY, canvas.width, sliceHpx,  // source: strip from full canvas
+          0, 0,    canvas.width, sliceHpx   // dest:   full temp canvas
+        );
+
+        // Place the slice at (marginX, marginY) — equal 20 mm on left and right
+        doc.addImage(
+          slice.toDataURL("image/jpeg", 0.95), "JPEG",
+          marginX, marginY,
+          contentW, sliceHmm
+        );
+
+        // ── Footer ────────────────────────────────────────
         doc.setFontSize(8);
         doc.setTextColor(180, 180, 180);
         doc.text(
@@ -580,6 +630,20 @@
       console.error("PDF export error:", err);
       alert("PDF export failed: " + err.message);
     } finally {
+      // ── Step 4: restore all inline styles ─────────────────
+      proposalText.style.removeProperty("width");
+      proposalText.style.removeProperty("max-width");
+      proposalText.style.removeProperty("overflow");
+      proposalText.style.removeProperty("box-sizing");
+      proposalText.querySelectorAll("table").forEach(t => {
+        t.style.removeProperty("width");
+        t.style.removeProperty("table-layout");
+        t.style.removeProperty("word-break");
+      });
+      proposalText.querySelectorAll("td, th").forEach(c => {
+        c.style.removeProperty("word-break");
+        c.style.removeProperty("overflow-wrap");
+      });
       pdfBtn.disabled = false;
       pdfBtn.textContent = "Export as PDF";
     }
