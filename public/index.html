@@ -133,6 +133,28 @@
     }
     @media (max-width: 560px) { .form-row { grid-template-columns: 1fr; } }
 
+    /* ---- Save my info button ---- */
+    .save-info-btn {
+      padding: 0.35rem 0.9rem;
+      background: transparent;
+      border: 1.5px solid #c5cae9;
+      border-radius: 6px;
+      font-size: 0.8rem;
+      font-weight: 600;
+      color: #5c6bc0;
+      cursor: pointer;
+      transition: background 0.15s, border-color 0.15s;
+      /* type=button so it never triggers form submission */
+    }
+    .save-info-btn:hover { background: #eef0fb; border-color: #5c6bc0; }
+
+    .saved-confirm {
+      display: none;
+      font-size: 0.8rem;
+      font-weight: 600;
+      color: #388e3c;
+    }
+
     /* ---- Generate button ---- */
     button#generateBtn {
       width: 100%;
@@ -321,6 +343,12 @@
         <textarea id="pastWork" placeholder="1–2 sentences on a similar project and its outcome. e.g. 'We rebranded Fielding Coffee in 2023 — they landed three new hotel accounts within six months.'" style="min-height:70px;"></textarea>
         <p class="field-hint">This becomes your "why us" credibility. Be specific — outcomes over adjectives.</p>
       </div>
+
+      <!-- Save my info — persists the three freelancer fields to localStorage -->
+      <div style="display:flex; align-items:center; gap:0.75rem; margin-top:0.2rem;">
+        <button type="button" id="saveInfoBtn" class="save-info-btn">Save my info</button>
+        <span id="savedConfirm" class="saved-confirm">✓ Saved</span>
+      </div>
     </div>
 
     <!-- ② CLIENT INFO -->
@@ -451,6 +479,36 @@
   const proposalText   = document.getElementById("proposalText");
   const copyBtn        = document.getElementById("copyBtn");
   const pdfBtn         = document.getElementById("pdfBtn");
+  const saveInfoBtn    = document.getElementById("saveInfoBtn");
+  const savedConfirm   = document.getElementById("savedConfirm");
+
+  // ── Restore saved freelancer info on page load ─────────────
+  // Reads the three Your Info fields from localStorage and pre-fills
+  // them so the user never has to type their own details again.
+  try {
+    const saved = JSON.parse(localStorage.getItem("proposalai_myinfo") || "null");
+    if (saved) {
+      if (saved.freelancerName) document.getElementById("freelancerName").value = saved.freelancerName;
+      if (saved.serviceType)    document.getElementById("serviceType").value    = saved.serviceType;
+      if (saved.pastWork)       document.getElementById("pastWork").value       = saved.pastWork;
+    }
+  } catch (e) {
+    // Ignore parse errors — localStorage may be unavailable or corrupted
+  }
+
+  // ── Save my info ───────────────────────────────────────────
+  saveInfoBtn.addEventListener("click", () => {
+    const info = {
+      freelancerName: document.getElementById("freelancerName").value.trim(),
+      serviceType:    document.getElementById("serviceType").value.trim(),
+      pastWork:       document.getElementById("pastWork").value.trim(),
+    };
+    localStorage.setItem("proposalai_myinfo", JSON.stringify(info));
+
+    // Show the "✓ Saved" confirmation for 2.5 seconds then hide it
+    savedConfirm.style.display = "inline";
+    setTimeout(() => { savedConfirm.style.display = "none"; }, 2500);
+  });
 
   form.addEventListener("submit", async (e) => {
     e.preventDefault();
